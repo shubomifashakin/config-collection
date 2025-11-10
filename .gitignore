@@ -1,0 +1,9 @@
+.env*
+node_modules
+certs
+certs/*.key
+certs/*.crt
+
+secrets/
+secrets/*.txt
+*.local

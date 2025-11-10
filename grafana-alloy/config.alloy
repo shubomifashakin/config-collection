@@ -1,0 +1,148 @@
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+local.file_match "logs" {
+  path_targets = [
+    {__path__ = "/var/log/example/*.log"}, #FIXME: CHANGE THE LOG PATH
+  ]
+}
+
+local.file "grafana_loki_password" {
+ filename = "/var/secrets/loki-password.txt" #FIXME: CHANGE THE LOKI PASSWORD FILE NAME
+
+  is_secret = true
+}
+
+local.file "grafana_prometheus_password" {
+ filename = "/var/secrets/prometheus-password.txt" #FIXME: CHANGE THE PROMETHEUS PASSWORD FILE NAME
+
+  is_secret = true
+}
+
+local.file "grafana_loki_username" {
+ filename = "/var/secrets/loki-username.txt" #FIXME: CHANGE THE LOKI USERNAME FILE NAME
+}
+
+local.file "grafana_prometheus_username" {
+ filename = "/var/secrets/prometheus-username.txt" #FIXME: CHANGE THE PROMETHEUS USERNAME FILE NAME
+}
+
+loki.source.file "example_logs" {
+  targets = local.file_match.logs.targets
+
+  file_watch {
+    min_poll_frequency = "1s"
+    max_poll_frequency = "2s"
+  }
+
+  forward_to = [loki.process.transform_logs.receiver]
+}
+
+loki.process "transform_logs" {
+  forward_to = [loki.write.send_to_loki.receiver]
+
+  stage.json {
+    expressions = {
+      level   = "",  
+      timestamp = "",
+      message   = "",
+      service_name = "serviceName",
+      environment = "",
+    }
+  }
+
+  stage.labels {
+    values = {
+      level = "",
+      service_name = "service_name",
+      environment = "",
+    }
+  }
+
+  stage.match {
+    selector = `{service_name="example"} |~ "^\\s*$"`
+    action   = "drop"
+  }
+
+  stage.match {
+    selector = `{service_name="example"} |~ "[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,} |~ "^\\s*$"`
+    action   = "drop"
+  }
+
+  stage.timestamp {
+    source = "timestamp"
+      format = "2006-01-02T15:04:05.000Z"
+  }
+  
+}
+
+loki.write "send_to_loki" {
+  endpoint {
+    url = "example.com" #FIXME: CHANGE THE URL
+
+    batch_wait = "2s"
+
+    batch_size = "1MiB"
+
+    basic_auth {
+      username = local.file.grafana_loki_username.content
+      password = local.file.grafana_loki_password.content
+    }
+  }
+}
+
+prometheus.exporter.redis "redis" {
+  redis_addr = "redis:6379"
+
+  redis_metrics_only = true
+}
+
+prometheus.scrape "redis_scrape_job" {
+  targets    = prometheus.exporter.redis.redis.targets
+  forward_to = [prometheus.remote_write.grafanaCloud.receiver]
+}
+
+prometheus.exporter.unix "system_metrics" {
+}
+
+prometheus.scrape "system_scrape_job" {
+  targets = prometheus.exporter.unix.system_metrics.targets
+  forward_to = [prometheus.remote_write.grafanaCloud.receiver]
+
+  scrape_interval = "20s"
+
+  honor_timestamps = true
+
+  scrape_timeout = "15s"
+}
+
+prometheus.scrape "service_scrape_job" {
+ targets = [
+    { __address__ = "UNKNOWN:3000" }, #FIXME: CHANGE THE SERVICE ADDRESS
+  ]
+
+  forward_to = [prometheus.remote_write.grafanaCloud.receiver]
+
+  scrape_interval = "15s"
+
+  scrape_timeout = "10s"
+
+  honor_timestamps = true
+
+  job_name= "service_metrics"
+}
+
+prometheus.remote_write "grafanaCloud" {
+   endpoint {
+    url = "example.com" #FIXME: CHANGE THE URL
+
+    remote_timeout = "20s"
+
+    basic_auth {
+      username = local.file.grafana_prometheus_username.content
+      password = local.file.grafana_prometheus_password.content
+    }
+  }
+}
